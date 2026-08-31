@@ -8,6 +8,11 @@ venv/
 .venv/
 env/
 
+# SQLite Databases (A2)
+*.db
+*.sqlite3
+tasks.db
+
 # Environment variables / secrets
 .env
 .env.*

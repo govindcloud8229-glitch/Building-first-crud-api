@@ -1,23 +1,80 @@
-from fastapi import FastAPI, HTTPException, status, Response
+import sqlite3
+from contextlib import asynccontextmanager
+from typing import Optional
+from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from typing import Optional
+
+# SQLite Database Configuration
+DB_NAME = "tasks.db"
+
+
+def get_db_connection():
+    """Establish a connection to the SQLite database with row access by column name."""
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    """Create the tasks table and insert initial seed data if the table is empty."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Create tasks table if it does not already exist
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            done INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    conn.commit()
+
+    # Check row count: seed only if database table is completely empty
+    cursor.execute("SELECT COUNT(*) FROM tasks")
+    count = cursor.fetchone()[0]
+    if count == 0:
+        seed_tasks = [
+            ("Learn FastAPI", 0),
+            ("Build a CRUD API", 0),
+            ("Review HTTP status codes", 1),
+        ]
+        cursor.executemany(
+            "INSERT INTO tasks (title, done) VALUES (?, ?)",
+            seed_tasks
+        )
+        conn.commit()
+
+    conn.close()
+
+
+def task_row_to_dict(row: sqlite3.Row) -> dict:
+    """Helper to convert a SQLite Row object to the expected API response dictionary."""
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "done": bool(row["done"])
+    }
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifecycle manager: ensure SQLite database and tables are ready on startup."""
+    init_db()
+    yield
+
 
 app = FastAPI(
     title="Task API",
-    description="A simple in-memory REST API for managing a to-do list built with FastAPI and Uvicorn.",
-    version="1.0"
+    description="A simple REST API for managing a to-do list backed by a SQLite database.",
+    version="1.0",
+    lifespan=lifespan
 )
 
-# In-memory database of tasks
-tasks = [
-    {"id": 1, "title": "Learn FastAPI", "done": False},
-    {"id": 2, "title": "Build a CRUD API", "done": False},
-    {"id": 3, "title": "Review HTTP status codes", "done": True},
-]
 
-
+# Pydantic request models for input validation and Swagger documentation
 class TaskCreate(BaseModel):
     title: str = Field(..., description="Task title (cannot be empty)", example="Buy groceries")
 
@@ -54,69 +111,106 @@ def health_check():
 
 @app.get("/tasks", summary="List All Tasks", tags=["Tasks"])
 def get_all_tasks():
-    """Returns the complete list of to-do tasks currently in memory."""
-    return tasks
+    """Retrieve all to-do tasks from the SQLite database."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, title, done FROM tasks")
+    rows = cursor.fetchall()
+    conn.close()
+    return [task_row_to_dict(row) for row in rows]
 
 
 @app.get("/tasks/{task_id}", summary="Get Task by ID", tags=["Tasks"])
 def get_task(task_id: int):
-    """Retrieve a single task by its unique numeric ID."""
-    for task in tasks:
-        if task["id"] == task_id:
-            return task
-    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    """Retrieve a single task by its unique numeric ID using a parameterized SQL query."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, title, done FROM tasks WHERE id = ?", (task_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    return task_row_to_dict(row)
 
 
 @app.post("/tasks", status_code=status.HTTP_201_CREATED, summary="Create a Task", tags=["Tasks"])
 def create_task(task_in: TaskCreate):
-    """Create a new task with an auto-incremented ID and done=false."""
+    """Create a new task in SQLite with an auto-generated ID and done=0 (false)."""
     clean_title = task_in.title.strip()
     if not clean_title:
         raise HTTPException(status_code=400, detail="Title cannot be empty")
 
-    new_id = max([t["id"] for t in tasks], default=0) + 1
-    new_task = {
-        "id": new_id,
-        "title": clean_title,
-        "done": False
-    }
-    tasks.append(new_task)
-    return new_task
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO tasks (title, done) VALUES (?, ?)",
+        (clean_title, 0)
+    )
+    conn.commit()
+    new_id = cursor.lastrowid
+
+    cursor.execute("SELECT id, title, done FROM tasks WHERE id = ?", (new_id,))
+    new_row = cursor.fetchone()
+    conn.close()
+
+    return task_row_to_dict(new_row)
 
 
 @app.put("/tasks/{task_id}", summary="Update a Task", tags=["Tasks"])
 def update_task(task_id: int, task_in: TaskUpdate):
-    """Update the title and/or done status of an existing task."""
+    """Update the title and/or done status of an existing task in SQLite."""
     if task_in.title is None and task_in.done is None:
         raise HTTPException(status_code=400, detail="At least one field (title or done) must be provided for update")
 
-    target_task = None
-    for task in tasks:
-        if task["id"] == task_id:
-            target_task = task
-            break
+    conn = get_db_connection()
+    cursor = conn.cursor()
 
-    if target_task is None:
+    cursor.execute("SELECT id, title, done FROM tasks WHERE id = ?", (task_id,))
+    current_row = cursor.fetchone()
+    if current_row is None:
+        conn.close()
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+    updated_title = current_row["title"]
+    updated_done = current_row["done"]
 
     if task_in.title is not None:
         clean_title = task_in.title.strip()
         if not clean_title:
+            conn.close()
             raise HTTPException(status_code=400, detail="Title cannot be empty")
-        target_task["title"] = clean_title
+        updated_title = clean_title
 
     if task_in.done is not None:
-        target_task["done"] = task_in.done
+        updated_done = 1 if task_in.done else 0
 
-    return target_task
+    cursor.execute(
+        "UPDATE tasks SET title = ?, done = ? WHERE id = ?",
+        (updated_title, updated_done, task_id)
+    )
+    conn.commit()
+
+    cursor.execute("SELECT id, title, done FROM tasks WHERE id = ?", (task_id,))
+    updated_row = cursor.fetchone()
+    conn.close()
+
+    return task_row_to_dict(updated_row)
 
 
 @app.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response, summary="Delete a Task", tags=["Tasks"])
 def delete_task(task_id: int):
-    """Delete a task by its numeric ID."""
-    global tasks
-    for i, task in enumerate(tasks):
-        if task["id"] == task_id:
-            tasks.pop(i)
-            return Response(status_code=status.HTTP_204_NO_CONTENT)
-    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    """Delete a task from SQLite by its numeric ID."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id FROM tasks WHERE id = ?", (task_id,))
+    row = cursor.fetchone()
+    if row is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+    cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    conn.commit()
+    conn.close()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

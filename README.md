@@ -1,36 +1,73 @@
 # Task API (`flyrank-task-api`)
 
-A clean, lightweight, in-memory REST API for managing a to-do list built with **FastAPI**, **Uvicorn**, and **Pydantic**. Built for the FlyRank Internship Backend AI Engineering Track (Week 2, Assignment A1).
+A clean, lightweight REST API for managing a to-do list built with **FastAPI**, **Uvicorn**, **Pydantic**, and **SQLite** (`sqlite3`). Built for the FlyRank Internship Backend AI Engineering Track (Week 3, Assignment A2).
 
 ---
 
 ## 📌 Project Overview
 
-This project implements a full CRUD (Create, Read, Update, Delete) API adhering strictly to REST conventions and proper HTTP status code standards. 
+This project builds directly on Assignment A1 by replacing transient in-memory Python list storage with a persistent **SQLite** database (`tasks.db`). The API adheres strictly to REST conventions, utilizes parameterized SQL queries for security, and maintains standard HTTP status codes.
 
-> **⚠️ In-Memory Storage Note:**  
-> This API stores all tasks in a Python in-memory list. No external database or file persistence is used. As expected, any changes (new tasks, updates, deletions) will reset to the default initial tasks whenever the server restarts.
+### 🔄 Evolution from A1 to A2
+- **Assignment A1**: Data was held in a temporary in-memory Python list (`tasks = [...]`) and was lost whenever the server restarted.
+- **Assignment A2**: Data is persisted in a local SQLite database (`tasks.db`). All CRUD operations execute raw SQL queries via Python's standard `sqlite3` library. Data persists across server restarts.
 
 ---
 
-## ✨ Features
+## 💡 Why SQLite?
 
-- **Root & Health Check**: Quickly verify server status and metadata.
-- **List Tasks**: Fetch all active to-do items.
-- **Get Task by ID**: Retrieve individual tasks with proper `404 Not Found` handling.
-- **Create Task**: Add new tasks with auto-incremented IDs and input validation (`201 Created` / `400 Bad Request`).
-- **Update Task**: Modify `title` and/or `done` status with validation (`200 OK` / `400 Bad Request` / `404 Not Found`).
-- **Delete Task**: Remove tasks returning an empty `204 No Content` response (`404 Not Found` if missing).
-- **Interactive Documentation**: Auto-generated interactive API docs via Swagger UI (`/docs`).
+1. **Single-file Database**: The entire database lives in a single local file (`tasks.db`), making it portable and easy to inspect.
+2. **Zero Configuration**: No standalone database server (like PostgreSQL or MySQL) is required. Python includes `sqlite3` in the standard library.
+3. **Data Persistence**: Created, updated, and deleted tasks survive server restarts without external infrastructure overhead.
+
+---
+
+## 🗄️ Database Architecture & Initialization
+
+- **Database File**: `tasks.db` (auto-created in the workspace root on startup).
+- **Schema**:
+  ```sql
+  CREATE TABLE IF NOT EXISTS tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      done INTEGER NOT NULL DEFAULT 0
+  );
+  ```
+  *(Note: SQLite stores `done` as `0` for false and `1` for true; the API converts this to standard boolean values in JSON).*
+
+- **Automatic Seeding**:
+  On startup, the application verifies `SELECT COUNT(*) FROM tasks`. If empty, it seeds exactly 3 default tasks:
+  1. `"Learn FastAPI"` (`done: false`)
+  2. `"Build a CRUD API"` (`done: false`)
+  3. `"Review HTTP status codes"` (`done: true`)
+  Subsequent restarts detect existing records and do **not** duplicate seed data.
+
+- **Git Ignored**:
+  `tasks.db` is specified in `.gitignore` so each clone automatically generates its own isolated database instance upon launch.
+
+---
+
+## 🛡️ Database Safety (Parameterized Queries)
+
+To prevent SQL injection vulnerabilities, all dynamic SQL queries use parameterized placeholders (`?`) rather than string interpolation:
+
+```python
+# Safe parameterized query example
+cursor.execute("SELECT id, title, done FROM tasks WHERE id = ?", (task_id,))
+cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", (clean_title, 0))
+cursor.execute("UPDATE tasks SET title = ?, done = ? WHERE id = ?", (title, done, task_id))
+cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+```
 
 ---
 
 ## 🛠️ Technology Stack
 
 - **Python 3.10+**
-- **FastAPI**: Modern, fast web framework for building APIs with Python.
-- **Uvicorn**: Lightning-fast ASGI web server implementation.
-- **Pydantic**: Data parsing and schema validation.
+- **FastAPI**: Modern, high-performance web framework for REST APIs.
+- **Uvicorn**: ASGI web server implementation.
+- **SQLite (`sqlite3`)**: Built-in relational database engine for persistent storage.
+- **Pydantic**: Request parsing and schema validation.
 - **Swagger UI**: Interactive browser-based API testing interface.
 
 ---
@@ -64,7 +101,7 @@ Start the API server with one single command:
 uvicorn main:app --reload
 ```
 
-The server will start listening at: `http://localhost:8000`
+The server will automatically create `tasks.db` (if missing), create the `tasks` table, seed default tasks, and listen at: `http://localhost:8000`
 
 ---
 
@@ -74,9 +111,9 @@ The server will start listening at: `http://localhost:8000`
 |:---|:---|:---|:---|
 | **GET** | `/` | API information and metadata | `200 OK` |
 | **GET** | `/health` | Service health check | `200 OK` |
-| **GET** | `/tasks` | List all tasks | `200 OK` |
+| **GET** | `/tasks` | List all tasks from SQLite | `200 OK` |
 | **GET** | `/tasks/{id}` | Get a single task by ID | `200 OK` / `404 Not Found` |
-| **POST** | `/tasks` | Create a new task | `201 Created` / `400 Bad Request` |
+| **POST** | `/tasks` | Create a new task in SQLite | `201 Created` / `400 Bad Request` |
 | **PUT** | `/tasks/{id}` | Update task title and/or status | `200 OK` / `400 Bad Request` / `404 Not Found` |
 | **DELETE** | `/tasks/{id}` | Delete a task by ID | `204 No Content` / `404 Not Found` |
 
@@ -139,16 +176,16 @@ curl -i -X DELETE http://localhost:8000/tasks/4
 HTTP/1.1 204 No Content
 ```
 
-### 5. Error Handling Test (`GET /tasks/99`)
+### 5. Error Handling Test (`GET /tasks/999`)
 ```bash
-curl -i http://localhost:8000/tasks/99
+curl -i http://localhost:8000/tasks/999
 ```
 **Output:**
 ```http
 HTTP/1.1 404 Not Found
 content-type: application/json
 
-{"detail":"Task 99 not found"}
+{"detail":"Task 999 not found"}
 ```
 
 ---
@@ -158,6 +195,11 @@ content-type: application/json
 FastAPI automatically serves interactive API documentation at:
 **[http://localhost:8000/docs](http://localhost:8000/docs)**
 
-You can view schemas, test endpoints with the **"Try it out"** button, and inspect status codes directly in your browser.
+---
 
-![Swagger UI](swagger-ui.png)
+## 🖼️ Database Inspection (DB Browser for SQLite)
+
+You can inspect `tasks.db` directly using [DB Browser for SQLite](https://sqlitebrowser.org/) to view the table schema and data rows:
+
+![DB Browser for SQLite Screenshot](db-browser-screenshot.png)
+
