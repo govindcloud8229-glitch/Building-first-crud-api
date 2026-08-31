@@ -4,7 +4,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional
 
-app = FastAPI()
+app = FastAPI(
+    title="Task API",
+    description="A simple in-memory REST API for managing a to-do list built with FastAPI and Uvicorn.",
+    version="1.0"
+)
 
 # In-memory database of tasks
 tasks = [
@@ -15,12 +19,12 @@ tasks = [
 
 
 class TaskCreate(BaseModel):
-    title: str = Field(..., description="Task title")
+    title: str = Field(..., description="Task title (cannot be empty)", example="Buy groceries")
 
 
 class TaskUpdate(BaseModel):
-    title: Optional[str] = Field(None, description="Updated task title")
-    done: Optional[bool] = Field(None, description="Updated status")
+    title: Optional[str] = Field(None, description="Updated task title", example="Buy groceries and cook")
+    done: Optional[bool] = Field(None, description="Updated completion status", example=True)
 
 
 @app.exception_handler(RequestValidationError)
@@ -31,36 +35,41 @@ async def validation_exception_handler(request, exc):
     )
 
 
-@app.get("/")
+@app.get("/", summary="API Information", tags=["General"])
 def read_root():
+    """Returns basic information about the API."""
     return {
         "name": "Task API",
         "version": "1.0"
     }
 
 
-@app.get("/health")
+@app.get("/health", summary="Health Check", tags=["General"])
 def health_check():
+    """Returns the operational status of the service."""
     return {
         "status": "ok"
     }
 
 
-@app.get("/tasks")
+@app.get("/tasks", summary="List All Tasks", tags=["Tasks"])
 def get_all_tasks():
+    """Returns the complete list of to-do tasks currently in memory."""
     return tasks
 
 
-@app.get("/tasks/{task_id}")
+@app.get("/tasks/{task_id}", summary="Get Task by ID", tags=["Tasks"])
 def get_task(task_id: int):
+    """Retrieve a single task by its unique numeric ID."""
     for task in tasks:
         if task["id"] == task_id:
             return task
     raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
 
-@app.post("/tasks", status_code=status.HTTP_201_CREATED)
+@app.post("/tasks", status_code=status.HTTP_201_CREATED, summary="Create a Task", tags=["Tasks"])
 def create_task(task_in: TaskCreate):
+    """Create a new task with an auto-incremented ID and done=false."""
     clean_title = task_in.title.strip()
     if not clean_title:
         raise HTTPException(status_code=400, detail="Title cannot be empty")
@@ -75,8 +84,9 @@ def create_task(task_in: TaskCreate):
     return new_task
 
 
-@app.put("/tasks/{task_id}")
+@app.put("/tasks/{task_id}", summary="Update a Task", tags=["Tasks"])
 def update_task(task_id: int, task_in: TaskUpdate):
+    """Update the title and/or done status of an existing task."""
     if task_in.title is None and task_in.done is None:
         raise HTTPException(status_code=400, detail="At least one field (title or done) must be provided for update")
 
@@ -101,8 +111,9 @@ def update_task(task_id: int, task_in: TaskUpdate):
     return target_task
 
 
-@app.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+@app.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response, summary="Delete a Task", tags=["Tasks"])
 def delete_task(task_id: int):
+    """Delete a task by its numeric ID."""
     global tasks
     for i, task in enumerate(tasks):
         if task["id"] == task_id:
