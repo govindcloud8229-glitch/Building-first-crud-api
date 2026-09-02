@@ -84,12 +84,26 @@ class TaskUpdate(BaseModel):
     done: Optional[bool] = Field(None, description="Updated completion status", example=True)
 
 
+from src.llm.schema import TriageRequest, TriageResponse
+from src.llm.service import triage_support_message
+
+
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request, exc):
+async def validation_exception_handler(request, exc: RequestValidationError):
+    errors = exc.errors()
+    if errors:
+        first_error = errors[0]
+        field_path = ".".join(str(loc) for loc in first_error.get("loc", []) if loc != "body")
+        msg = first_error.get("msg", "Invalid input")
+        detail = f"Invalid field '{field_path}': {msg}" if field_path else f"Validation error: {msg}"
+    else:
+        detail = "Invalid request payload"
+
     return JSONResponse(
         status_code=400,
-        content={"detail": "Invalid request: title is required and cannot be empty"},
+        content={"detail": detail, "errors": exc.errors()},
     )
+
 
 
 @app.get("/", summary="API Information", tags=["General"])
@@ -214,3 +228,19 @@ def delete_task(task_id: int):
     conn.commit()
     conn.close()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post(
+    "/triage",
+    response_model=TriageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Triage Support Message",
+    tags=["LLM Triage"],
+)
+def triage_endpoint(request: TriageRequest):
+    """
+    Classify a customer support message into structured JSON with category, urgency, confidence, and reason.
+    Adheres strictly to schema validation, single repair retry, and quarantine on failure.
+    """
+    return triage_support_message(request)
+
