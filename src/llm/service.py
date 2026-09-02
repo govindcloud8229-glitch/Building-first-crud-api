@@ -49,20 +49,55 @@ def load_prompt(version: Optional[str] = None) -> str:
 
 
 def sanitize_and_extract_json(raw_text: str) -> str:
-    """Strip markdown code blocks or conversational prefixes to extract pure JSON."""
+    """Extract valid JSON from raw text, handling markdown fences, thoughts, and commentary."""
     text = raw_text.strip()
-    # Match markdown code fences like ```json ... ``` or ``` ... ```
-    fence_pattern = r"^```(?:json)?\s*([\s\S]*?)\s*```$"
-    fence_match = re.search(fence_pattern, text, re.IGNORECASE)
-    if fence_match:
-        text = fence_match.group(1).strip()
-    
-    # If there is extra text before/after JSON object, extract substring from first { to last }
-    first_brace = text.find("{")
-    last_brace = text.rfind("}")
-    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-        text = text[first_brace:last_brace + 1].strip()
-        
+
+    # 1. Quick test if whole text is already valid JSON
+    try:
+        json.loads(text)
+        return text
+    except Exception:
+        pass
+
+    # 2. Extract from markdown code fences ```json ... ```
+    fence_pattern = r"```(?:json)?\s*([\s\S]*?)\s*```"
+    fence_matches = re.findall(fence_pattern, text, re.IGNORECASE)
+    for fm in fence_matches:
+        candidate = fm.strip()
+        try:
+            json.loads(candidate)
+            return candidate
+        except Exception:
+            pass
+
+    # 3. Find matching JSON object braces with depth counter
+    start_idx = text.find("{")
+    while start_idx != -1:
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start_idx, len(text)):
+            c = text[i]
+            if c == '"' and not escape:
+                in_string = not in_string
+            elif c == '\\' and in_string:
+                escape = not escape
+                continue
+            elif not in_string:
+                if c == '{':
+                    depth += 1
+                elif c == '}':
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[start_idx : i + 1]
+                        try:
+                            json.loads(candidate)
+                            return candidate
+                        except Exception:
+                            break
+            escape = False
+        start_idx = text.find("{", start_idx + 1)
+
     return text
 
 
@@ -151,11 +186,12 @@ def triage_support_message(request: TriageRequest) -> TriageResponse:
 
     total_duration_ms = 0.0
     combined_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    repair_count = 0
+    raw_output_attempt1 = ""
+    first_error_message = ""
 
     # 5. First Attempt
     try:
-        raw_output, usage, duration_ms = execute_completion_with_retry(
+        raw_output_attempt1, usage, duration_ms = execute_completion_with_retry(
             messages=messages,
             model=config["model"],
             temperature=0.0,
@@ -165,7 +201,7 @@ def triage_support_message(request: TriageRequest) -> TriageResponse:
             combined_usage[k] += usage.get(k, 0)
 
         # Parse and validate
-        clean_json = sanitize_and_extract_json(raw_output)
+        clean_json = sanitize_and_extract_json(raw_output_attempt1)
         validated = TriageResponse.model_validate_json(clean_json)
 
         log_structured_cost(
@@ -184,20 +220,21 @@ def triage_support_message(request: TriageRequest) -> TriageResponse:
         raise HTTPException(status_code=getattr(e, "status_code", 502), detail=str(e))
 
     except Exception as first_err:
-        logger.warning(f"[Triage] Initial output failed validation: {first_err}. Initiating repair retry...")
-        repair_count = 1
+        first_error_message = str(first_err)
+        logger.warning(f"[Triage] Initial output failed validation: {first_error_message}. Initiating repair retry...")
 
     # 6. Repair Retry (Exactly ONE retry)
     repair_messages = list(messages)
-    repair_messages.append({"role": "assistant", "content": raw_output})
+    repair_messages.append({"role": "assistant", "content": raw_output_attempt1})
     repair_messages.append({
         "role": "user",
         "content": (
-            f"Your previous answer was rejected for this reason: {str(first_err)}.\n"
+            f"Your previous answer was rejected for this reason: {first_error_message}.\n"
             "Return ONLY a corrected, valid JSON object strictly matching the specified schema."
         ),
     })
 
+    repair_output = ""
     try:
         repair_output, repair_usage, repair_duration_ms = execute_completion_with_retry(
             messages=repair_messages,
@@ -227,12 +264,13 @@ def triage_support_message(request: TriageRequest) -> TriageResponse:
         raise HTTPException(status_code=getattr(e, "status_code", 502), detail=str(e))
 
     except Exception as second_err:
-        logger.error(f"[Triage] Repair retry failed validation: {second_err}. Quarantining output.")
+        second_error_message = str(second_err)
+        logger.error(f"[Triage] Repair retry failed validation: {second_error_message}. Quarantining output.")
         write_quarantine_log(
             prompt_version=prompt_version,
             input_text=request.text,
-            raw_output=repair_output if 'repair_output' in locals() else raw_output,
-            error_detail=f"Initial: {str(first_err)} | Repair: {str(second_err)}",
+            raw_output=repair_output or raw_output_attempt1,
+            error_detail=f"Initial: {first_error_message} | Repair: {second_error_message}",
             attempts=2,
         )
         raise HTTPException(
