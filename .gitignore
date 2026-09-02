@@ -27,3 +27,4 @@ tasks.db
 
 # Logs
 *.log
+logs/*.jsonl
