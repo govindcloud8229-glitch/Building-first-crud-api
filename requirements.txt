@@ -3,4 +3,6 @@ uvicorn>=0.28.0
 pydantic>=2.0.0
 openai>=1.0.0
 python-dotenv>=1.0.0
-
+inngest>=0.5.0
+httpx>=0.26.0
+pytest>=7.0.0

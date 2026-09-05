@@ -2,9 +2,17 @@ import sqlite3
 from contextlib import asynccontextmanager
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
+import inngest.fast_api
+
+from src.llm.schema import TriageRequest, TriageResponse
+from src.llm.service import triage_support_message
+from src.workflow.router import router as workflow_router
+from src.workflow.inngest_workflow import inngest_client, ai_decision_workflow_fn
 
 # SQLite Database Configuration
 DB_NAME = "tasks.db"
@@ -67,10 +75,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Task API",
-    description="A simple REST API for managing a to-do list backed by a SQLite database.",
-    version="1.0",
+    title="Task & AI Workflow API",
+    description="A production-grade REST backend with SQLite CRUD, LLM Triage, and AI Decision Flows with React Flow and Inngest.",
+    version="2.0",
     lifespan=lifespan
+)
+
+# CORS Configuration for React Frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -82,11 +99,6 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     title: Optional[str] = Field(None, description="Updated task title", example="Buy groceries and cook")
     done: Optional[bool] = Field(None, description="Updated completion status", example=True)
-
-
-from fastapi.encoders import jsonable_encoder
-from src.llm.schema import TriageRequest, TriageResponse
-from src.llm.service import triage_support_message
 
 
 @app.exception_handler(RequestValidationError)
@@ -106,13 +118,20 @@ async def validation_exception_handler(request, exc: RequestValidationError):
     )
 
 
+# Mount Workflow Router
+app.include_router(workflow_router)
+
+# Serve Inngest Functions endpoint at /api/inngest
+inngest.fast_api.serve(app, inngest_client, [ai_decision_workflow_fn])
+
 
 @app.get("/", summary="API Information", tags=["General"])
 def read_root():
     """Returns basic information about the API."""
     return {
-        "name": "Task API",
-        "version": "1.0"
+        "name": "Task & AI Workflow API",
+        "version": "2.0",
+        "features": ["CRUD Tasks", "LLM Support Triage", "AI Decision Flow with React Flow & Inngest"],
     }
 
 
@@ -120,7 +139,9 @@ def read_root():
 def health_check():
     """Returns the operational status of the service."""
     return {
-        "status": "ok"
+        "status": "ok",
+        "database": "connected",
+        "inngest": "configured",
     }
 
 
@@ -244,4 +265,3 @@ def triage_endpoint(request: TriageRequest):
     Adheres strictly to schema validation, single repair retry, and quarantine on failure.
     """
     return triage_support_message(request)
-

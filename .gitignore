@@ -1,7 +1,8 @@
-# Python cache
+# Python cache & testing
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
 
 # Virtual environments
 venv/
@@ -12,6 +13,14 @@ env/
 *.db
 *.sqlite3
 tasks.db
+
+# Frontend dependencies and production builds
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Inngest dev server cache
+.inngest/
 
 # Environment variables / secrets
 .env
