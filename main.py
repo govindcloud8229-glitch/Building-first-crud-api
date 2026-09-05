@@ -84,6 +84,7 @@ class TaskUpdate(BaseModel):
     done: Optional[bool] = Field(None, description="Updated completion status", example=True)
 
 
+from fastapi.encoders import jsonable_encoder
 from src.llm.schema import TriageRequest, TriageResponse
 from src.llm.service import triage_support_message
 
@@ -101,7 +102,7 @@ async def validation_exception_handler(request, exc: RequestValidationError):
 
     return JSONResponse(
         status_code=400,
-        content={"detail": detail, "errors": exc.errors()},
+        content=jsonable_encoder({"detail": detail, "errors": errors}),
     )
 
 
