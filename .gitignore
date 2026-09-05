@@ -9,10 +9,15 @@ venv/
 .venv/
 env/
 
-# SQLite Databases (A2)
+# SQLite Databases (A2 & A8)
 *.db
 *.sqlite3
 tasks.db
+pdf-report-generator/report.db
+
+# Generated PDF artifacts (A8)
+pdf-report-generator/reports/*.pdf
+!pdf-report-generator/reports/.gitkeep
 
 # Frontend dependencies and production builds
 frontend/node_modules/
