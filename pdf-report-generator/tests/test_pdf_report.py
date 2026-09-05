@@ -7,19 +7,24 @@ import pytest
 import pypdf
 from fastapi.testclient import TestClient
 
-# Load parent main module explicitly to avoid namespace collision
-PARENT_DIR = Path(__file__).resolve().parent.parent.parent
-parent_main_path = PARENT_DIR / "main.py"
-spec = importlib.util.spec_from_file_location("parent_main", str(parent_main_path))
-parent_main = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(parent_main)
-
-# Load A8 modules
 A8_DIR = Path(__file__).resolve().parent.parent
+PARENT_DIR = A8_DIR.parent
+
 if str(A8_DIR) not in sys.path:
     sys.path.insert(0, str(A8_DIR))
 
-import main as a8_main
+# Load A8 main explicitly
+a8_main_path = A8_DIR / "main.py"
+spec_a8 = importlib.util.spec_from_file_location("a8_main_mod", str(a8_main_path))
+a8_main = importlib.util.module_from_spec(spec_a8)
+spec_a8.loader.exec_module(a8_main)
+
+# Load Parent main explicitly
+parent_main_path = PARENT_DIR / "main.py"
+spec_parent = importlib.util.spec_from_file_location("parent_main_mod", str(parent_main_path))
+parent_main = importlib.util.module_from_spec(spec_parent)
+spec_parent.loader.exec_module(parent_main)
+
 import database as a8_db
 import seed as a8_seed
 import report_queries as a8_queries

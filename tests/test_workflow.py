@@ -1,4 +1,7 @@
 import os
+import sys
+import importlib.util
+from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
@@ -6,7 +9,13 @@ from fastapi.testclient import TestClient
 os.environ["LLM_STUB"] = "1"
 os.environ["LLM_ENABLED"] = "true"
 
-from main import app
+ROOT_DIR = Path(__file__).resolve().parent.parent
+root_main_path = ROOT_DIR / "main.py"
+spec = importlib.util.spec_from_file_location("root_app_main", str(root_main_path))
+root_main = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(root_main)
+app = root_main.app
+
 from src.workflow.llm_decision import parse_and_validate_decision, evaluate_decision_node
 
 client = TestClient(app)
